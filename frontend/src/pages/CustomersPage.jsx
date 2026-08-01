@@ -338,6 +338,14 @@ const handlePhoneCountryChange = (country) => {
   };
 
   const validatePhone = () => {
+    if (!form.phoneNationalNumber.trim()) {
+      return null;
+    }
+
+    if (!form.phoneCountryCode) {
+      return 'Seleccione el país del teléfono';
+    }
+
     const phoneNumber = parsePhoneNumberFromString(
       form.phoneNationalNumber,
       form.phoneCountryCode
@@ -361,14 +369,6 @@ const handlePhoneCountryChange = (country) => {
 
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email.trim())) {
       return 'Ingrese un correo electrónico válido';
-    }
-
-    if (!form.phoneCountryCode) {
-      return 'Seleccione el país del teléfono';
-    }
-
-    if (!form.phoneNationalNumber.trim()) {
-      return 'Ingrese el teléfono del cliente';
     }
 
     const phoneError = validatePhone();
@@ -408,10 +408,13 @@ const handlePhoneCountryChange = (country) => {
   };
 
   const buildPayload = () => {
-    const phoneNumber = parsePhoneNumberFromString(
-      form.phoneNationalNumber,
-      form.phoneCountryCode
-    );
+    const hasPhone = Boolean(form.phoneNationalNumber.trim());
+    const phoneNumber = hasPhone
+      ? parsePhoneNumberFromString(
+          form.phoneNationalNumber,
+          form.phoneCountryCode
+        )
+      : null;
 
     return {
       documentType: form.documentType,
@@ -431,10 +434,10 @@ const handlePhoneCountryChange = (country) => {
       tertiaryEconomicActivityCode: form.tertiaryEconomicActivityCode,
       tertiaryEconomicActivityName: form.tertiaryEconomicActivityName,
       email: form.email.trim(),
-      phoneCountryCode: form.phoneCountryCode,
-      phoneDialCode: form.phoneDialCode,
-      phoneNationalNumber: phoneNumber?.nationalNumber || form.phoneNationalNumber.trim(),
-      phone: phoneNumber?.number || form.phoneNationalNumber.trim(),
+      phoneCountryCode: hasPhone ? form.phoneCountryCode : '',
+      phoneDialCode: hasPhone ? form.phoneDialCode : '',
+      phoneNationalNumber: hasPhone ? (phoneNumber?.nationalNumber || form.phoneNationalNumber.trim()) : '',
+      phone: hasPhone ? (phoneNumber?.number || form.phoneNationalNumber.trim()) : '',
       departmentCode: form.departmentCode,
       departmentName: form.departmentName,
       districtName: form.districtName,
@@ -667,7 +670,7 @@ const handlePhoneCountryChange = (country) => {
 
             <div>
               <label className="block text-sm text-gray-700 mb-1">
-                Teléfono <span className="text-red-600">*</span>
+                Teléfono <span className="text-xs text-gray-500">(opcional)</span>
               </label>
 
               <div className="grid grid-cols-[96px_1fr] gap-3">

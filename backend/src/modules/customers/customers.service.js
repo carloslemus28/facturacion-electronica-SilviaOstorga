@@ -230,8 +230,20 @@ const inferCustomerType = (data) => {
 };
 
 const validatePhoneData = ({ phoneCountryCode, phoneNationalNumber }) => {
-  if (!phoneCountryCode || !phoneNationalNumber) {
-    const error = new Error('Debe seleccionar país telefónico e ingresar el número de teléfono');
+  const normalizedPhoneCountryCode = normalizeText(phoneCountryCode || 'SV');
+  const normalizedPhoneNationalNumber = normalizeText(phoneNationalNumber);
+
+  if (!normalizedPhoneNationalNumber) {
+    return {
+      phoneCountryCode: null,
+      phoneDialCode: null,
+      phoneNationalNumber: null,
+      phone: null
+    };
+  }
+
+  if (!normalizedPhoneCountryCode) {
+    const error = new Error('Debe seleccionar país telefónico para validar el número de teléfono');
     error.statusCode = 400;
     throw error;
   }
@@ -239,14 +251,17 @@ const validatePhoneData = ({ phoneCountryCode, phoneNationalNumber }) => {
   let dialCode = '';
 
   try {
-    dialCode = getCountryCallingCode(phoneCountryCode);
+    dialCode = getCountryCallingCode(normalizedPhoneCountryCode);
   } catch (error) {
     const customError = new Error('Código de país telefónico no válido');
     customError.statusCode = 400;
     throw customError;
   }
 
-  const phoneNumber = parsePhoneNumberFromString(phoneNationalNumber, phoneCountryCode);
+  const phoneNumber = parsePhoneNumberFromString(
+    normalizedPhoneNationalNumber,
+    normalizedPhoneCountryCode
+  );
 
   if (!phoneNumber || !phoneNumber.isValid()) {
     const error = new Error('El número de teléfono no corresponde al formato del país seleccionado');
@@ -255,7 +270,7 @@ const validatePhoneData = ({ phoneCountryCode, phoneNationalNumber }) => {
   }
 
   return {
-    phoneCountryCode,
+    phoneCountryCode: normalizedPhoneCountryCode,
     phoneDialCode: dialCode,
     phoneNationalNumber: phoneNumber.nationalNumber,
     phone: phoneNumber.number
@@ -291,11 +306,6 @@ const validateCustomerData = (data) => {
     throw error;
   }
 
-  if (!data.phoneNationalNumber || !data.phoneNationalNumber.trim()) {
-    const error = new Error('El teléfono del cliente es obligatorio');
-    error.statusCode = 400;
-    throw error;
-  }
 
   if (documentType !== 'SIN_DOCUMENTO' && !documentNumber) {
     const error = new Error('Ingrese el número de documento del cliente');

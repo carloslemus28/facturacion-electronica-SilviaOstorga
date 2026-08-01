@@ -903,7 +903,7 @@ const formatExcludedSubjectDocumentNumber = (
   return formatReceiverDocumentNumber(documentType, rawValue);
 };
 
-const buildConsumerFinalReceiver = (customer) => {
+const buildConsumerFinalReceiver = (customer, company = {}) => {
   if (!customer?.id) {
     return null;
   }
@@ -923,7 +923,7 @@ const buildConsumerFinalReceiver = (customer) => {
       municipio: cleanCatalogCode(customer.municipalityCode, 2),
       complemento: cleanAddressComplement(customer.addressComplement)
     },
-    telefono: cleanPhone(customer.phone),
+    telefono: cleanPhone(customer.phone) || cleanPhone(company.phone) || '00000000',
     correo: cleanString(customer.email)
   };
 };
@@ -938,6 +938,7 @@ const getDeliveryPurposeCode = (invoice) => {
 
 const buildDeliveryNoteReceiver = (invoice) => {
   const customer = invoice.customer || {};
+  const company = invoice.company || {};
 
   if (!customer?.id) {
     return null;
@@ -959,13 +960,13 @@ const buildDeliveryNoteReceiver = (invoice) => {
       municipio: cleanCatalogCode(customer.municipalityCode, 2),
       complemento: cleanAddressComplement(customer.addressComplement)
     },
-    telefono: cleanPhone(customer.phone),
+    telefono: cleanPhone(customer.phone) || cleanPhone(company.phone) || '00000000',
     correo: cleanString(customer.email),
     bienTitulo: getDeliveryPurposeCode(invoice)
   };
 };
 
-const buildTaxpayerReceiver = (customer) => {
+const buildTaxpayerReceiver = (customer, company = {}) => {
   if (!customer?.id) {
     return null;
   }
@@ -982,7 +983,7 @@ const buildTaxpayerReceiver = (customer) => {
       municipio: cleanCatalogCode(customer.municipalityCode, 2),
       complemento: cleanAddressComplement(customer.addressComplement)
     },
-    telefono: cleanPhone(customer.phone),
+    telefono: cleanPhone(customer.phone) || cleanPhone(company.phone) || '00000000',
     correo: cleanString(customer.email)
   };
 };
@@ -1013,7 +1014,7 @@ const buildExportReceiver = (invoice) => {
   };
 };
 
-const buildExcludedSubject = (customer) => {
+const buildExcludedSubject = (customer, company = {}) => {
   if (!customer?.id) {
     return null;
   }
@@ -1032,7 +1033,7 @@ const buildExcludedSubject = (customer) => {
       municipio: cleanCatalogCode(customer.municipalityCode, 2),
       complemento: cleanAddressComplement(customer.addressComplement)
     },
-    telefono: cleanPhone(customer.phone),
+    telefono: cleanPhone(customer.phone) || cleanPhone(company.phone) || '00000000',
     correo: cleanString(customer.email)
   };
 };
@@ -1040,20 +1041,21 @@ const buildExcludedSubject = (customer) => {
 const buildReceiver = (invoice) => {
   const documentTypeCode = String(invoice.documentTypeCode || '');
   const customer = invoice.customer || {};
+  const company = invoice.company || {};
 
   if (isDeliveryNote(documentTypeCode)) {
     return buildDeliveryNoteReceiver(invoice);
   }
 
   if (isTaxpayerReceiverDocument(documentTypeCode)) {
-    return buildTaxpayerReceiver(customer);
+    return buildTaxpayerReceiver(customer, company);
   }
 
   if (isExportInvoice(documentTypeCode)) {
     return buildExportReceiver(invoice);
   }
 
-  return buildConsumerFinalReceiver(customer);
+  return buildConsumerFinalReceiver(customer, company);
 };
 
 const getRelatedDocumentNumberForItem = (invoice) => {
@@ -1579,7 +1581,7 @@ const buildStandardDteJson = (invoice) => {
     return {
       identificacion: buildIdentification(invoice),
       emisor: buildIssuer(invoice),
-      sujetoExcluido: buildExcludedSubject(invoice.customer || {}),
+      sujetoExcluido: buildExcludedSubject(invoice.customer || {}, invoice.company || {}),
       cuerpoDocumento: buildBody(invoice),
       resumen: buildSummary(invoice),
       apendice: buildAppendix(invoice)
