@@ -2,21 +2,27 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import toast from 'react-hot-toast';
 import {
   AlertTriangle,
+  Download,
   FilePlus2,
+  FileText,
   Loader2,
   PackagePlus,
   Plus,
   RefreshCcw,
   Save,
+  Send,
   Trash2
 } from 'lucide-react';
 
 import { getCustomersRequest } from '../api/customers.api';
 import { getProductsRequest } from '../api/products.api';
 import {
+  downloadDtePdfRequest,
   generateInvoiceRequest,
   getAvailableDocumentsForCreditNoteRequest,
-  getInvoiceByIdRequest
+  getDtePdfRequest,
+  getInvoiceByIdRequest,
+  transmitInvoiceRequest
 } from '../api/invoices.api';
 import { refreshRequest } from '../api/auth.api';
 import { useNavigate, useSearchParams } from 'react-router-dom';
@@ -69,6 +75,37 @@ const initialItemForm = {
 };
 
 const DEFAULT_ALLOWED_DOCUMENT_TYPES = ['01', '03'];
+
+const getFileNameFromDisposition = (contentDisposition, fallbackName) => {
+  if (!contentDisposition) return fallbackName;
+
+  const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+
+  if (utf8Match?.[1]) {
+    return decodeURIComponent(utf8Match[1]);
+  }
+
+  const normalMatch = contentDisposition.match(/filename="?([^"]+)"?/i);
+
+  if (normalMatch?.[1]) {
+    return normalMatch[1];
+  }
+
+  return fallbackName;
+};
+
+const downloadBlob = (blob, fileName) => {
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement('a');
+
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+
+  link.remove();
+  window.URL.revokeObjectURL(url);
+};
 
 const getTodayInputDate = () => {
   const parts = new Intl.DateTimeFormat('en-CA', {
@@ -222,6 +259,10 @@ function GenerateInvoicePage() {
   const [creditNoteDocuments, setCreditNoteDocuments] = useState([]);
   const [relatedInvoiceDetail, setRelatedInvoiceDetail] = useState(null);
 
+  const [generatedInvoice, setGeneratedInvoice] = useState(null);
+  const [transmittingGeneratedInvoice, setTransmittingGeneratedInvoice] = useState(false);
+  const [pdfProcessingGeneratedInvoice, setPdfProcessingGeneratedInvoice] = useState(null);
+
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [loadingCreditNoteDocuments, setLoadingCreditNoteDocuments] = useState(false);
@@ -232,6 +273,16 @@ function GenerateInvoicePage() {
 
   const editInvoiceId = searchParams.get('edit');
   const isEditMode = Boolean(editInvoiceId);
+  const workingInvoiceId = editInvoiceId || generatedInvoice?.id || null;
+  const isWorkingExistingInvoice = Boolean(workingInvoiceId);
+  const canTransmitGeneratedInvoice = Boolean(
+    generatedInvoice?.id &&
+    ['GENERADO', 'RECHAZADO'].includes(String(generatedInvoice.status || ''))
+  );
+  const generatedInvoiceErrorMessage = generatedInvoice?.rejectionReason ||
+    generatedInvoice?.validationErrorsJson?.message ||
+    generatedInvoice?.mhResponseJson?.message ||
+    '';
 
   const editLoadedRef = useRef(false);
   const ignoreDocumentTypeResetRef = useRef(false);
@@ -329,6 +380,26 @@ function GenerateInvoicePage() {
     }
   };
 
+  const registerGeneratedInvoiceContext = (invoice) => {
+    if (!invoice) {
+      setGeneratedInvoice(null);
+      originalEditProductQuantitiesRef.current = {};
+      return;
+    }
+
+    const productQuantityMap = {};
+
+    (invoice.items || []).forEach((item) => {
+      if (item.productId && item.itemType === 'PRODUCTO') {
+        productQuantityMap[item.productId] =
+          Number(productQuantityMap[item.productId] || 0) + Number(item.quantity || 0);
+      }
+    });
+
+    originalEditProductQuantitiesRef.current = productQuantityMap;
+    setGeneratedInvoice(invoice);
+  };
+
   const loadInvoiceForEdit = async (invoiceId) => {
     try {
       const data = await getInvoiceByIdRequest(invoiceId);
@@ -340,8 +411,8 @@ function GenerateInvoicePage() {
         return;
       }
 
-      if (invoice.status !== 'GENERADO') {
-        toast.error('Solo se pueden editar DTE en estado GENERADO');
+      if (!['GENERADO', 'RECHAZADO'].includes(String(invoice.status || ''))) {
+        toast.error('Solo se pueden editar DTE en estado GENERADO o RECHAZADO');
         navigate('/invoices');
         return;
       }
@@ -399,6 +470,7 @@ function GenerateInvoicePage() {
       setNotes(invoice.notes || '');
       setItems(mappedItems);
       setItemForm(initialItemForm);
+      registerGeneratedInvoiceContext(invoice);
 
       if (invoice.documentTypeCode === '05') {
         await loadCreditNoteDocuments();
@@ -440,7 +512,7 @@ function GenerateInvoicePage() {
 
   useEffect(() => {
     if (!userContext?.company?.allowedDocumentTypes) return;
-    
+
     if (isEditMode && !editLoadedRef.current) return;
 
     const allowed = parseAllowedDocumentTypes(userContext.company.allowedDocumentTypes);
@@ -821,7 +893,7 @@ function GenerateInvoicePage() {
       : Number(selectedProduct.stock || 0);
 
     if (selectedProduct.itemType === 'PRODUCTO') {
-      const originalEditQuantity = isEditMode
+      const originalEditQuantity = isWorkingExistingInvoice
         ? Number(originalEditProductQuantitiesRef.current[selectedProduct.id] || 0)
         : 0;
 
@@ -919,6 +991,7 @@ function GenerateInvoicePage() {
     setNotes('');
     setItemForm(initialItemForm);
     setItems([]);
+    registerGeneratedInvoiceContext(null);
   };
 
   const generateDte = async () => {
@@ -956,36 +1029,140 @@ function GenerateInvoicePage() {
     try {
       setGenerating(true);
 
-      const data = isEditMode
-        ? await updateGeneratedInvoiceRequest(editInvoiceId, payload)
+      const data = workingInvoiceId
+        ? await updateGeneratedInvoiceRequest(workingInvoiceId, payload)
         : await generateInvoiceRequest(payload);
 
+      const savedInvoice = data.invoice || null;
+
       toast.success(
-        data.message || (isEditMode ? 'DTE actualizado correctamente' : 'DTE generado correctamente')
+        data.message || (workingInvoiceId ? 'DTE actualizado correctamente' : 'DTE generado correctamente')
       );
 
-      if (isEditMode) {
-        navigate('/invoices');
-        return;
+      if (savedInvoice) {
+        registerGeneratedInvoiceContext(savedInvoice);
       }
 
-      resetForm();
       await loadData();
     } catch (error) {
       console.error('Error generando DTE:', error);
 
-      const message = error.response?.data?.message || 'No se pudo generar el DTE';
+      const message = error.response?.data?.message || 'No se pudo generar o actualizar el DTE';
       toast.error(message);
     } finally {
       setGenerating(false);
     }
   };
 
+  const openGeneratedPdf = async () => {
+    if (!generatedInvoice?.id) {
+      toast.error('Primero debe generar el DTE');
+      return;
+    }
+
+    try {
+      setPdfProcessingGeneratedInvoice('open');
+
+      const response = await getDtePdfRequest(generatedInvoice.id, 'document');
+      const blobUrl = window.URL.createObjectURL(response.data);
+
+      window.open(blobUrl, '_blank', 'noopener,noreferrer');
+
+      setTimeout(() => {
+        window.URL.revokeObjectURL(blobUrl);
+      }, 60000);
+    } catch (error) {
+      console.error('Error abriendo PDF:', error);
+
+      const message = error.response?.data?.message || 'No se pudo abrir el PDF del DTE';
+      toast.error(message);
+    } finally {
+      setPdfProcessingGeneratedInvoice(null);
+    }
+  };
+
+  const downloadGeneratedPdf = async () => {
+    if (!generatedInvoice?.id) {
+      toast.error('Primero debe generar el DTE');
+      return;
+    }
+
+    try {
+      setPdfProcessingGeneratedInvoice('download');
+
+      const response = await downloadDtePdfRequest(generatedInvoice.id, 'document');
+      const fallbackName = `${generatedInvoice.controlNumber || 'DTE'}.pdf`;
+      const fileName = getFileNameFromDisposition(
+        response.headers?.['content-disposition'],
+        fallbackName
+      );
+
+      downloadBlob(response.data, fileName);
+      toast.success('PDF descargado correctamente');
+    } catch (error) {
+      console.error('Error descargando PDF:', error);
+
+      const message = error.response?.data?.message || 'No se pudo descargar el PDF del DTE';
+      toast.error(message);
+    } finally {
+      setPdfProcessingGeneratedInvoice(null);
+    }
+  };
+
+  const transmitGeneratedInvoice = async () => {
+    if (!generatedInvoice?.id) {
+      toast.error('Primero debe generar el DTE');
+      return;
+    }
+
+    if (!canTransmitGeneratedInvoice) {
+      toast.error('Solo se pueden transmitir documentos generados o rechazados');
+      return;
+    }
+
+    try {
+      setTransmittingGeneratedInvoice(true);
+
+      const data = await transmitInvoiceRequest(generatedInvoice.id);
+
+      toast.success(data.message || 'DTE transmitido correctamente a Hacienda');
+
+      if (data.automaticEmail?.sent) {
+        toast.success(`Correo enviado automáticamente a ${data.automaticEmail.recipient}`);
+      } else if (data.automaticEmail?.skipped) {
+        toast.error('El DTE fue aceptado, pero el cliente no tiene correo registrado. Puede reenviarlo desde Documentos Emitidos.');
+      } else if (data.automaticEmail && !data.automaticEmail.sent) {
+        toast.error('El DTE fue aceptado, pero no se pudo enviar el correo automático. Puede reenviarlo desde Documentos Emitidos.');
+      }
+
+      if (data.invoice) {
+        registerGeneratedInvoiceContext(data.invoice);
+      }
+    } catch (error) {
+      console.error('Error transmitiendo DTE:', error);
+
+      const message = error.response?.data?.message || 'No se pudo transmitir el DTE';
+      toast.error(message);
+
+      try {
+        const data = await getInvoiceByIdRequest(generatedInvoice.id);
+        if (data.invoice) {
+          registerGeneratedInvoiceContext(data.invoice);
+        }
+      } catch (reloadError) {
+        console.error('Error recargando DTE rechazado:', reloadError);
+      }
+    } finally {
+      setTransmittingGeneratedInvoice(false);
+    }
+  };
+
+
   if (loading) {
     return (
       <div className="bg-white rounded-2xl border shadow-sm p-8 text-center">
         <Loader2 className="animate-spin mx-auto text-blue-900" size={34} />
-        <p className="text-gray-600 mt-3">{isEditMode ? 'Cargando DTE para edición...' : 'Cargando datos para generar DTE...'}</p>
+        <p className="text-gray-600 mt-3">{isWorkingExistingInvoice ? 'Cargando DTE para edición...' : 'Cargando datos para generar DTE...'}</p>
       </div>
     );
   }
@@ -1000,10 +1177,10 @@ function GenerateInvoicePage() {
 
           <div>
             <h2 className="text-2xl md:text-3xl font-bold text-gray-900 leading-tight">
-              {isEditMode ? 'Editar DTE' : 'Generar DTE'}
+              {isWorkingExistingInvoice ? 'Editar DTE' : 'Generar DTE'}
             </h2>
             <p className="text-gray-600 mt-1">
-              {isEditMode
+              {isWorkingExistingInvoice
                 ? 'Modifique la información del DTE antes de transmitirlo a Hacienda.'
                 : 'Cree documentos tributarios electrónicos por sucursal, cliente y productos/servicios registrados.'}
             </p>
@@ -1035,7 +1212,7 @@ function GenerateInvoicePage() {
                 <select
                   value={documentTypeCode}
                   onChange={(event) => setDocumentTypeCode(event.target.value)}
-                  disabled={isEditMode}
+                  disabled={isWorkingExistingInvoice}
                   className="w-full border border-gray-300 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-blue-800 bg-white disabled:bg-gray-100 disabled:text-gray-600 disabled:cursor-not-allowed"
                 >
                   {availableDocumentTypes.map((doc) => (
@@ -1073,7 +1250,7 @@ function GenerateInvoicePage() {
                 getOptionValue={(customer) => customer.id}
                 getOptionLabel={getCustomerLabel}
                 getOptionDescription={getCustomerDescription}
-                disabled={documentTypeCode === '05' && !selectedRelatedInvoice && !isEditMode}
+                disabled={documentTypeCode === '05' && !selectedRelatedInvoice && !isWorkingExistingInvoice}
               />
             </div>
 
@@ -1481,20 +1658,87 @@ function GenerateInvoicePage() {
           <button
             type="button"
             onClick={generateDte}
-            disabled={generating}
+            disabled={generating || transmittingGeneratedInvoice || (generatedInvoice && !canTransmitGeneratedInvoice)}
             className="mt-5 w-full inline-flex items-center justify-center gap-2 bg-green-700 text-white rounded-xl px-5 py-3 font-semibold hover:bg-green-800 disabled:opacity-70"
           >
             {generating ? <Loader2 className="animate-spin" size={20} /> : <Save size={20} />}
             {generating
-              ? isEditMode ? 'Guardando...' : 'Generando...'
-              : isEditMode ? 'Guardar cambios' : 'Generar DTE'}
+              ? isWorkingExistingInvoice ? 'Guardando...' : 'Generando...'
+              : isWorkingExistingInvoice ? 'Guardar cambios' : 'Generar DTE'}
           </button>
+
+          {generatedInvoice && (
+            <div className="mt-4 rounded-2xl border border-green-200 bg-green-50 p-4 text-sm text-green-950 space-y-3">
+              <div>
+                <p className="font-bold">DTE generado</p>
+                <p className="break-all mt-1">
+                  {generatedInvoice.controlNumber || 'Sin número de control'}
+                </p>
+                <p className="text-xs mt-1">
+                  Estado actual: <strong>{generatedInvoice.status || 'GENERADO'}</strong>
+                </p>
+              </div>
+
+              {generatedInvoiceErrorMessage && (
+                <div className="rounded-xl border border-red-200 bg-red-50 p-3 text-red-800">
+                  <p className="font-semibold">Corrección requerida</p>
+                  <p className="mt-1">{generatedInvoiceErrorMessage}</p>
+                  <p className="mt-2 text-xs">
+                    Edite los datos en esta misma pantalla, presione Guardar cambios y luego transmita nuevamente.
+                  </p>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 gap-2">
+                <button
+                  type="button"
+                  onClick={transmitGeneratedInvoice}
+                  disabled={!canTransmitGeneratedInvoice || transmittingGeneratedInvoice || generating}
+                  className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-900 px-4 py-3 font-semibold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {transmittingGeneratedInvoice ? <Loader2 className="animate-spin" size={18} /> : <Send size={18} />}
+                  Transmitir a Hacienda
+                </button>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={openGeneratedPdf}
+                    disabled={Boolean(pdfProcessingGeneratedInvoice)}
+                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-cyan-200 bg-white px-4 py-2 font-semibold text-cyan-800 hover:bg-cyan-50 disabled:opacity-60"
+                  >
+                    {pdfProcessingGeneratedInvoice === 'open' ? <Loader2 className="animate-spin" size={17} /> : <FileText size={17} />}
+                    Ver PDF
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={downloadGeneratedPdf}
+                    disabled={Boolean(pdfProcessingGeneratedInvoice)}
+                    className="inline-flex items-center justify-center gap-2 rounded-xl border border-cyan-200 bg-white px-4 py-2 font-semibold text-cyan-800 hover:bg-cyan-50 disabled:opacity-60"
+                  >
+                    {pdfProcessingGeneratedInvoice === 'download' ? <Loader2 className="animate-spin" size={17} /> : <Download size={17} />}
+                    Descargar PDF
+                  </button>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={resetForm}
+                  disabled={generating || transmittingGeneratedInvoice}
+                  className="inline-flex items-center justify-center gap-2 rounded-xl border px-4 py-2 font-semibold text-gray-700 hover:bg-gray-50 disabled:opacity-60"
+                >
+                  Nuevo DTE
+                </button>
+              </div>
+            </div>
+          )}
 
           {hasUnsavedData && (
             <div className="mt-4 bg-yellow-50 border border-yellow-200 rounded-xl p-3 text-sm text-yellow-900 flex gap-2">
               <AlertTriangle size={18} className="shrink-0" />
               <p>
-                {isEditMode
+                {isWorkingExistingInvoice
                   ? 'Hay cambios sin guardar. Si sale de esta pantalla, se perderán los cambios no guardados.'
                   : 'Hay datos sin generar. Si sale de esta pantalla, se perderán los cambios no guardados.'}
               </p>

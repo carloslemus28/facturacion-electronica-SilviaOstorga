@@ -358,35 +358,24 @@ const drawHeader = async (doc, invoice) => {
 
   drawBox(doc, x, y, PAGE.contentWidth, 152);
 
-const logoBuffer = imageBufferFromDataUrl(company.logoDataUrl);
+  const issuerInfoX = x + 10;
+  const issuerInfoWidth = 304;
 
-drawAdaptiveLogo(
-  doc,
-  logoBuffer,
-  x + LOGO_BOX.xOffset,
-  y + LOGO_BOX.yOffset,
-  LOGO_BOX.width,
-  LOGO_BOX.height
-);
+  drawText(doc, company.commercialName || company.legalName, issuerInfoX, y + 12, {
+    width: issuerInfoWidth,
+    size: 9.6,
+    bold: true,
+    height: 28,
+    ellipsis: false,
+    lineGap: 1
+  });
 
-const issuerInfoX = x + 146;
-const issuerInfoWidth = 168;
-
-drawText(doc, company.commercialName || company.legalName, issuerInfoX, y + 12, {
-  width: issuerInfoWidth,
-  size: 9.6,
-  bold: true,
-  height: 28,
-  ellipsis: false,
-  lineGap: 1
-});
-
-drawText(doc, company.legalName, issuerInfoX, y + 43, {
-  width: issuerInfoWidth,
-  size: 6.8,
-  height: 16,
-  ellipsis: false
-});
+  drawText(doc, company.legalName, issuerInfoX, y + 43, {
+    width: issuerInfoWidth,
+    size: 6.8,
+    height: 16,
+    ellipsis: false
+  });
 
   drawLabelValue(doc, 'Giro', company.economicActivityName, x + 10, y + 76, 32, 276, {
     size: 6.4,
