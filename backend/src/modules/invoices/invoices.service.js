@@ -1,4 +1,4 @@
-const { Op, literal } = require('sequelize');
+const { Op, literal, fn, col } = require('sequelize');
 const { v4: uuidv4 } = require('uuid');
 const { sequelize } = require('../../config/database');
 
@@ -389,6 +389,65 @@ const validateInvoiceData = (data) => {
   }
 };
 
+const normalizeRetentionForItems = (items = []) => {
+  const hasRetention = items.some((item) => Number(item.retention1 || 0) > 0);
+
+  if (!hasRetention) {
+    return items.map((item) => ({
+      ...item,
+      retention1: 0
+    }));
+  }
+
+  const eligibleItems = items.filter((item) => {
+    const saleType = item.saleType || 'GRAVADA';
+    const base = round4(Number(item.quantity || 0) * Number(item.unitPrice || 0));
+
+    return saleType === 'GRAVADA' && base > 0;
+  });
+
+  const retentionBase = round4(
+    eligibleItems.reduce((sum, item) => (
+      sum + round4(Number(item.quantity || 0) * Number(item.unitPrice || 0))
+    ), 0)
+  );
+
+  if (retentionBase <= 100) {
+    const error = new Error('La retención 1% solo aplica cuando la base gravada supera $100.00');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const totalRetention = round2(retentionBase * 0.01);
+  let assignedRetention = 0;
+  let eligibleIndex = 0;
+
+  return items.map((item) => {
+    const saleType = item.saleType || 'GRAVADA';
+    const itemBase = round4(Number(item.quantity || 0) * Number(item.unitPrice || 0));
+
+    if (saleType !== 'GRAVADA' || itemBase <= 0) {
+      return {
+        ...item,
+        retention1: 0
+      };
+    }
+
+    eligibleIndex += 1;
+
+    const retentionAmount = eligibleIndex === eligibleItems.length
+      ? round4(totalRetention - assignedRetention)
+      : round4((totalRetention * itemBase) / retentionBase);
+
+    assignedRetention = round4(assignedRetention + retentionAmount);
+
+    return {
+      ...item,
+      retention1: retentionAmount
+    };
+  });
+};
+
 const parseAllowedDocumentTypes = (value) => {
   if (!value) {
     return DEFAULT_ALLOWED_DOCUMENT_TYPES;
@@ -702,6 +761,97 @@ const buildInvoiceVisibilityInclude = (user) => {
   return pointOfSaleInclude;
 };
 
+const buildInvoiceVisibilityWhere = async (currentUser) => {
+  const where = {
+    companyId: currentUser.company.id
+  };
+
+  if (!isAdminUser(currentUser)) {
+    const establishmentId = getUserEstablishmentId(currentUser);
+
+    if (!establishmentId) {
+      const error = new Error('El usuario no tiene establecimiento o sucursal asignada');
+      error.statusCode = 403;
+      throw error;
+    }
+
+    const pointOfSales = await PointOfSale.findAll({
+      attributes: ['id'],
+      where: {
+        companyId: currentUser.company.id,
+        establishmentId
+      },
+      raw: true
+    });
+
+    where.pointOfSaleId = {
+      [Op.in]: pointOfSales.map((pointOfSale) => pointOfSale.id)
+    };
+  }
+
+  return where;
+};
+
+const INVOICE_LIST_ATTRIBUTES = [
+  'id',
+  'companyId',
+  'pointOfSaleId',
+  'userId',
+  'customerId',
+  'documentTypeCode',
+  'documentTypeName',
+  'controlNumber',
+  'generationCode',
+  'validationStatus',
+  'receptionSeal',
+  'relatedInvoiceId',
+  'relatedControlNumber',
+  'relatedGenerationCode',
+  'relatedDocumentTypeCode',
+  'transmittedAt',
+  'acceptedAt',
+  'rejectedAt',
+  'rejectionReason',
+  'invalidatedAt',
+  'invalidationReason',
+  'invalidationReceptionSeal',
+  'invalidationGenerationCode',
+  'invalidationDeadlineAt',
+  'status',
+  'issuedAt',
+  'operationCondition',
+  'paymentMethod',
+  'noSuj',
+  'exenta',
+  'gravada',
+  'subtotal',
+  'iva',
+  'retention1',
+  'fovial',
+  'cotrans',
+  'total',
+  'notes'
+];
+
+const DASHBOARD_INVOICE_ATTRIBUTES = [
+  'id',
+  'customerId',
+  'documentTypeName',
+  'controlNumber',
+  'status',
+  'issuedAt',
+  'total'
+];
+
+const CUSTOMER_LIGHT_ATTRIBUTES = [
+  'id',
+  'name',
+  'email',
+  'documentType',
+  'documentNumber',
+  'nrc'
+];
+
 const validateInvoiceVisibility = async ({ invoice, user }) => {
   if (!invoice) {
     const error = new Error('DTE no encontrado');
@@ -851,6 +1001,8 @@ const createGeneratedInvoice = async ({ data, user }) => {
       customer
     });
 
+    const normalizedItems = normalizeRetentionForItems(data.items);
+
     const controlResult = await controlNumbersService.generateNextControlNumber({
       companyId: currentUser.company.id,
       pointOfSaleId: currentUser.pointOfSale.id,
@@ -898,7 +1050,7 @@ const createGeneratedInvoice = async ({ data, user }) => {
       notes: data.notes || null
     }, { transaction });
 
-    for (const item of data.items) {
+    for (const item of normalizedItems) {
       let product = null;
 
       if (item.productId) {
@@ -1122,6 +1274,8 @@ const updateGeneratedInvoice = async ({ id, data, user }) => {
       customer
     });
 
+    const normalizedItemsForUpdate = normalizeRetentionForItems(data.items);
+
     const previousItems = await InvoiceItem.findAll({
       where: {
         invoiceId: invoice.id
@@ -1166,7 +1320,7 @@ const updateGeneratedInvoice = async ({ id, data, user }) => {
     let cotrans = 0;
     let total = 0;
 
-    for (const item of data.items) {
+    for (const item of normalizedItemsForUpdate) {
       let product = null;
 
       if (item.productId) {
@@ -1379,9 +1533,12 @@ const listInvoices = async ({ user, startDate, endDate }) => {
     throw error;
   }
 
+  const visibilityWhere = await buildInvoiceVisibilityWhere(currentUser);
+
   const invoices = await Invoice.findAll({
+    attributes: INVOICE_LIST_ATTRIBUTES,
     where: {
-      companyId: currentUser.company.id,
+      ...visibilityWhere,
       issuedAt: getIssuedAtRangeForList({
         startDate,
         endDate
@@ -1390,9 +1547,13 @@ const listInvoices = async ({ user, startDate, endDate }) => {
     include: [
       {
         model: Customer,
-        as: 'customer'
+        as: 'customer',
+        attributes: CUSTOMER_LIGHT_ATTRIBUTES
       },
-      buildInvoiceVisibilityInclude(currentUser),
+      {
+        ...buildPointOfSaleInclude(),
+        attributes: ['id', 'code', 'name', 'establishmentId']
+      },
       {
         model: User,
         as: 'user',
@@ -1400,10 +1561,10 @@ const listInvoices = async ({ user, startDate, endDate }) => {
       }
     ],
     order: [
-  ['documentTypeCode', 'ASC'],
-  [literal("CAST(SUBSTRING_INDEX(`Invoice`.`control_number`, '-', -1) AS UNSIGNED)"), 'DESC'],
-  ['id', 'DESC']
-]
+      ['documentTypeCode', 'ASC'],
+      [literal("CAST(SUBSTRING_INDEX(`Invoice`.`control_number`, '-', -1) AS UNSIGNED)"), 'DESC'],
+      ['id', 'DESC']
+    ]
   });
 
   await attachReturnEventsToInvoices(invoices);
@@ -1472,23 +1633,40 @@ const getDashboardSummary = async ({ user }) => {
     throw error;
   }
 
-  const invoices = await Invoice.findAll({
-    where: {
-      companyId: currentUser.company.id,
-      issuedAt: getCurrentMonthIssuedAtRange()
-    },
-    include: [
-      {
-        model: Customer,
-        as: 'customer'
-      },
-      buildInvoiceVisibilityInclude(currentUser)
-    ],
-    order: [['issuedAt', 'DESC']]
-  });
+  const visibilityWhere = await buildInvoiceVisibilityWhere(currentUser);
+  const where = {
+    ...visibilityWhere,
+    issuedAt: getCurrentMonthIssuedAtRange()
+  };
+
+  const [statusRows, recentInvoices] = await Promise.all([
+    Invoice.findAll({
+      attributes: [
+        'status',
+        [fn('COUNT', col('Invoice.id')), 'count'],
+        [fn('SUM', col('Invoice.total')), 'amount']
+      ],
+      where,
+      group: ['status'],
+      raw: true
+    }),
+    Invoice.findAll({
+      attributes: DASHBOARD_INVOICE_ATTRIBUTES,
+      where,
+      include: [
+        {
+          model: Customer,
+          as: 'customer',
+          attributes: ['id', 'name']
+        }
+      ],
+      order: [['issuedAt', 'DESC']],
+      limit: 5
+    })
+  ]);
 
   const summary = {
-    totalDocuments: invoices.length,
+    totalDocuments: 0,
     generated: 0,
     signed: 0,
     transmitted: 0,
@@ -1498,40 +1676,47 @@ const getDashboardSummary = async ({ user }) => {
     totalAmount: 0,
     generatedAmount: 0,
     acceptedAmount: 0,
-    recentInvoices: invoices.slice(0, 5)
+    recentInvoices
   };
 
-  for (const invoice of invoices) {
-    const total = Number(invoice.total || 0);
+  for (const row of statusRows) {
+    const status = row.status;
+    const count = Number(row.count || 0);
+    const amount = Number(row.amount || 0);
 
-    summary.totalAmount += total;
+    summary.totalDocuments += count;
+    summary.totalAmount += amount;
 
-    if (invoice.status === 'GENERADO') {
-      summary.generated += 1;
-      summary.generatedAmount += total;
+    if (status === 'GENERADO') {
+      summary.generated = count;
+      summary.generatedAmount = amount;
     }
 
-    if (invoice.status === 'FIRMADO') {
-      summary.signed += 1;
+    if (status === 'FIRMADO') {
+      summary.signed = count;
     }
 
-    if (invoice.status === 'TRANSMITIDO') {
-      summary.transmitted += 1;
+    if (status === 'TRANSMITIDO') {
+      summary.transmitted = count;
     }
 
-    if (invoice.status === 'ACEPTADO') {
-      summary.accepted += 1;
-      summary.acceptedAmount += total;
+    if (status === 'ACEPTADO') {
+      summary.accepted = count;
+      summary.acceptedAmount = amount;
     }
 
-    if (invoice.status === 'RECHAZADO') {
-      summary.rejected += 1;
+    if (status === 'RECHAZADO') {
+      summary.rejected = count;
     }
 
-    if (invoice.status === 'ANULADO') {
-      summary.annulled += 1;
+    if (status === 'ANULADO') {
+      summary.annulled = count;
     }
   }
+
+  summary.totalAmount = round4(summary.totalAmount);
+  summary.generatedAmount = round4(summary.generatedAmount);
+  summary.acceptedAmount = round4(summary.acceptedAmount);
 
   return summary;
 };

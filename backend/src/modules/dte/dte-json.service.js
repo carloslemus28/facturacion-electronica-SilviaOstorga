@@ -1382,7 +1382,7 @@ const buildCreditNoteSummary = (invoice) => {
   const ivaPerci1 = 0;
   const ivaRete1 = round2(invoice.retention1);
   const reteRenta = 0;
-  const montoTotalOperacion = round2(subTotal + totalIva + ivaPerci1);
+  const montoTotalOperacion = round2(subTotal + totalIva + ivaPerci1 - ivaRete1 - reteRenta);
 
   return {
     totalNoSuj,

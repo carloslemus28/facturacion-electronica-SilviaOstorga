@@ -1,5 +1,11 @@
 const { Sequelize } = require('sequelize');
 
+const getPositiveInteger = (value, fallback) => {
+  const parsed = Number.parseInt(value, 10);
+
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
 const sequelize = new Sequelize(
   process.env.MYSQLDATABASE || process.env.MYSQL_DATABASE,
   process.env.MYSQLUSER || process.env.MYSQL_USER,
@@ -10,6 +16,16 @@ const sequelize = new Sequelize(
     dialect: 'mysql',
     logging: process.env.NODE_ENV === 'development' ? console.log : false,
     timezone: '-06:00',
+    pool: {
+      max: getPositiveInteger(process.env.DB_POOL_MAX, 4),
+      min: 0,
+      acquire: getPositiveInteger(process.env.DB_POOL_ACQUIRE_MS, 30000),
+      idle: getPositiveInteger(process.env.DB_POOL_IDLE_MS, 5000),
+      evict: getPositiveInteger(process.env.DB_POOL_EVICT_MS, 5000)
+    },
+    dialectOptions: {
+      connectTimeout: getPositiveInteger(process.env.DB_CONNECT_TIMEOUT_MS, 15000)
+    },
     define: {
       timestamps: true,
       underscored: true
@@ -20,8 +36,8 @@ const sequelize = new Sequelize(
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 const testConnection = async () => {
-  const maxRetries = Number(process.env.DB_CONNECTION_RETRIES || 10);
-  const retryDelayMs = Number(process.env.DB_CONNECTION_RETRY_DELAY_MS || 3000);
+  const maxRetries = getPositiveInteger(process.env.DB_CONNECTION_RETRIES, 10);
+  const retryDelayMs = getPositiveInteger(process.env.DB_CONNECTION_RETRY_DELAY_MS, 3000);
 
   for (let attempt = 1; attempt <= maxRetries; attempt += 1) {
     try {

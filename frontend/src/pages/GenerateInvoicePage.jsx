@@ -750,6 +750,11 @@ function GenerateInvoicePage() {
         .reduce((sum, item) => sum + Number(item.subtotal || 0), 0)
         .toFixed(4)
     );
+    if (retentionBase <= 100) {
+      toast.error('La retención 1% solo aplica cuando la base gravada supera $100.00');
+      return;
+    }
+
     const totalRetention = Number((retentionBase * 0.01).toFixed(2));
 
     if (totalRetention <= 0) {
@@ -994,6 +999,14 @@ function GenerateInvoicePage() {
     registerGeneratedInvoiceContext(null);
   };
 
+  const resetGeneratedDteWorkflow = async () => {
+    resetForm();
+    editLoadedRef.current = false;
+    originalEditProductQuantitiesRef.current = {};
+    navigate('/invoices/generate', { replace: true });
+    await loadData();
+  };
+
   const generateDte = async () => {
     const validationError = validateInvoice();
 
@@ -1133,6 +1146,11 @@ function GenerateInvoicePage() {
         toast.error('El DTE fue aceptado, pero el cliente no tiene correo registrado. Puede reenviarlo desde Documentos Emitidos.');
       } else if (data.automaticEmail && !data.automaticEmail.sent) {
         toast.error('El DTE fue aceptado, pero no se pudo enviar el correo automático. Puede reenviarlo desde Documentos Emitidos.');
+      }
+
+      if (['ACEPTADO', 'TRANSMITIDO'].includes(String(data.invoice?.status || ''))) {
+        await resetGeneratedDteWorkflow();
+        return;
       }
 
       if (data.invoice) {
@@ -1697,7 +1715,7 @@ function GenerateInvoicePage() {
                   className="inline-flex items-center justify-center gap-2 rounded-xl bg-blue-900 px-4 py-3 font-semibold text-white hover:bg-blue-800 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   {transmittingGeneratedInvoice ? <Loader2 className="animate-spin" size={18} /> : <Send size={18} />}
-                  Transmitir a Hacienda
+                  Enviar a Hacienda
                 </button>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
