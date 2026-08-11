@@ -1,5 +1,24 @@
 const emailsService = require('../emails/emails.service');
+const dteJsonService = require('../dte/dte-json.service');
+const dtePdfService = require('../dte/dte-pdf.service');
+const ZipStream = require('../../utils/zip-stream');
 const invoicesService = require('./invoices.service');
+
+
+const sanitizeFileName = (value) => {
+  return String(value || 'documento')
+    .replace(/[\\/:*?"<>|]/g, '-')
+    .replace(/\s+/g, '_');
+};
+
+const getZipFileName = ({ startDate, endDate }) => {
+  const today = new Date().toISOString().slice(0, 10);
+  const from = startDate || 'inicio';
+  const to = endDate || today;
+
+  return sanitizeFileName(`dte-json-pdf-${from}_a_${to}.zip`);
+};
+
 
 const createGeneratedInvoice = async (req, res, next) => {
   try {
@@ -52,6 +71,106 @@ const listInvoices = async (req, res, next) => {
     });
   } catch (error) {
     next(error);
+  }
+};
+
+
+const exportInvoicesJsonPdfZip = async (req, res, next) => {
+  const startDate = req.query.startDate || '';
+  const endDate = req.query.endDate || '';
+  const configuredBatchSize = Number(process.env.DTE_EXPORT_BATCH_SIZE || 25);
+  const batchSize = Number.isFinite(configuredBatchSize) && configuredBatchSize > 0
+    ? Math.min(configuredBatchSize, 50)
+    : 25;
+
+  try {
+    const fileName = getZipFileName({ startDate, endDate });
+
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+    res.setHeader('Cache-Control', 'no-store');
+
+    const zip = new ZipStream(res);
+    const exportedAt = new Date().toISOString();
+
+    await zip.addFile('LEAME.txt', [
+      'Exportación de DTE generada desde Documentos emitidos.',
+      `Fecha de generación del ZIP: ${exportedAt}`,
+      `Fecha inicial filtrada: ${startDate || 'No especificada'}`,
+      `Fecha final filtrada: ${endDate || 'No especificada'}`,
+      '',
+      'Carpetas:',
+      '- json/: contiene la representación JSON de cada DTE.',
+      '- pdf/: contiene la representación gráfica PDF de cada DTE.',
+      '- errores/: solo aparece si algún documento no pudo generarse.'
+    ].join('\n'));
+
+    let lastId = 0;
+    let total = 0;
+
+    while (true) {
+      const invoices = await invoicesService.listInvoicesForJsonPdfExportBatch({
+        user: req.user,
+        startDate,
+        endDate,
+        lastId,
+        limit: batchSize
+      });
+
+      if (invoices.length === 0) {
+        break;
+      }
+
+      for (const invoice of invoices) {
+        lastId = Number(invoice.id);
+        total += 1;
+
+        const baseName = sanitizeFileName(
+          invoice.controlNumber || `DTE-${invoice.id}`
+        );
+
+        try {
+          const json = dteJsonService.buildStandardDteJson(invoice);
+
+          await zip.addFile(
+            `json/${baseName}.json`,
+            JSON.stringify(json, null, 2)
+          );
+        } catch (jsonError) {
+          await zip.addFile(
+            `errores/${baseName}-json-error.txt`,
+            jsonError.message || 'No se pudo generar el JSON del DTE'
+          );
+        }
+
+        try {
+          const pdfBuffer = await dtePdfService.buildDocumentPdf(invoice);
+
+          await zip.addFile(`pdf/${baseName}.pdf`, pdfBuffer);
+        } catch (pdfError) {
+          await zip.addFile(
+            `errores/${baseName}-pdf-error.txt`,
+            pdfError.message || 'No se pudo generar el PDF del DTE'
+          );
+        }
+      }
+    }
+
+    if (total === 0) {
+      await zip.addFile(
+        'SIN_DOCUMENTOS.txt',
+        'No se encontraron DTE en el rango de fechas seleccionado.'
+      );
+    }
+
+    await zip.finalize();
+  } catch (error) {
+    if (!res.headersSent) {
+      next(error);
+      return;
+    }
+
+    res.end();
   }
 };
 
@@ -235,6 +354,7 @@ module.exports = {
   createGeneratedInvoice,
   updateGeneratedInvoice,
   listInvoices,
+  exportInvoicesJsonPdfZip,
   getInvoiceById,
   getDashboardSummary,
   listAvailableDocumentsForCreditNote,

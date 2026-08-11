@@ -966,5 +966,6 @@ const getDtePdfByInvoiceId = async ({ id, user, type = 'document' }) => {
 };
 
 module.exports = {
-  getDtePdfByInvoiceId
+  getDtePdfByInvoiceId,
+  buildDocumentPdf
 };

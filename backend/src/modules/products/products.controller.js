@@ -1,4 +1,5 @@
 const productsService = require('./products.service');
+const { setCsvDownloadHeaders } = require('../../utils/csv-stream');
 
 const listProducts = async (req, res, next) => {
   try {
@@ -15,6 +16,30 @@ const listProducts = async (req, res, next) => {
     });
   } catch (error) {
     next(error);
+  }
+};
+
+
+const downloadProductsCsv = async (req, res, next) => {
+  try {
+    const dateKey = new Date().toISOString().slice(0, 10);
+
+    setCsvDownloadHeaders(res, `productos-servicios-${dateKey}.csv`);
+
+    await productsService.streamProductsCsv({
+      query: req.query,
+      user: req.user,
+      stream: res
+    });
+
+    res.end();
+  } catch (error) {
+    if (!res.headersSent) {
+      next(error);
+      return;
+    }
+
+    res.end();
   }
 };
 
@@ -69,6 +94,7 @@ const updateProduct = async (req, res, next) => {
 
 module.exports = {
   listProducts,
+  downloadProductsCsv,
   getProductById,
   createProduct,
   updateProduct

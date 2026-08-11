@@ -9,7 +9,8 @@ import {
   Save,
   Search,
   UserRound,
-  UsersRound
+  UsersRound,
+  Download
 } from 'lucide-react';
 
 import {
@@ -23,14 +24,48 @@ import examples from 'libphonenumber-js/examples.mobile.json';
 
 import {
   createCustomerRequest,
+  downloadCustomersCsvRequest,
   getCustomersRequest,
   updateCustomerRequest
 } from '../api/customers.api';
 
+import { useAuth } from '../context/AuthContext';
 import SearchableSelect from '../components/SearchableSelect';
 import { economicActivities } from '../data/economicActivities';
 import { elSalvadorDepartments } from '../data/elSalvadorDepartments';
 import { elSalvadorLocations } from '../data/elSalvadorLocations';
+
+
+const getFileNameFromDisposition = (contentDisposition, fallbackName) => {
+  if (!contentDisposition) return fallbackName;
+
+  const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+
+  if (utf8Match?.[1]) {
+    return decodeURIComponent(utf8Match[1]);
+  }
+
+  const normalMatch = contentDisposition.match(/filename="?([^"]+)"?/i);
+
+  if (normalMatch?.[1]) {
+    return normalMatch[1];
+  }
+
+  return fallbackName;
+};
+
+const downloadBlob = (blob, fileName) => {
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement('a');
+
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+
+  link.remove();
+  window.URL.revokeObjectURL(url);
+};
 
 const getCountryName = (countryCode) => {
   try {
@@ -128,6 +163,9 @@ const getMaxNationalPhoneLength = (countryCode) => {
 };
 
 function CustomersPage() {
+  const { user } = useAuth();
+  const isAdmin = Array.isArray(user?.roles) && user.roles.includes('ADMIN');
+
   const [customers, setCustomers] = useState([]);
   const [form, setForm] = useState(initialForm);
   const [editingId, setEditingId] = useState(null);
@@ -137,6 +175,7 @@ function CustomersPage() {
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [downloadingCsv, setDownloadingCsv] = useState(false);
 
   const [showNoActivityModal, setShowNoActivityModal] = useState(false);
   const [confirmedWithoutActivity, setConfirmedWithoutActivity] = useState(false);
@@ -542,6 +581,36 @@ const handlePhoneCountryChange = (country) => {
     await loadCustomers();
   };
 
+
+  const handleDownloadCsv = async () => {
+    if (!isAdmin) {
+      toast.error('Solo el usuario administrador puede descargar el CSV');
+      return;
+    }
+
+    try {
+      setDownloadingCsv(true);
+
+      const response = await downloadCustomersCsvRequest({
+        q,
+        isActive: activeFilter
+      });
+
+      const fileName = getFileNameFromDisposition(
+        response.headers?.['content-disposition'],
+        'clientes.csv'
+      );
+
+      downloadBlob(response.data, fileName);
+      toast.success('CSV de clientes descargado correctamente');
+    } catch (error) {
+      console.error('Error descargando CSV de clientes:', error);
+      toast.error(error.response?.data?.message || 'No se pudo descargar el CSV de clientes');
+    } finally {
+      setDownloadingCsv(false);
+    }
+  };
+
   return (
     <div>
       {showNoActivityModal && (
@@ -600,14 +669,28 @@ const handlePhoneCountryChange = (country) => {
           </div>
         </div>
 
-        <button
-          type="button"
-          onClick={loadCustomers}
-          className="inline-flex items-center justify-center gap-2 bg-white border rounded-xl px-4 py-3 text-gray-700 hover:bg-gray-50"
-        >
-          <RefreshCcw size={18} />
-          Actualizar
-        </button>
+        <div className="flex flex-col sm:flex-row gap-3">
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={handleDownloadCsv}
+              disabled={downloadingCsv}
+              className="inline-flex items-center justify-center gap-2 bg-green-700 text-white rounded-xl px-4 py-3 hover:bg-green-600 disabled:opacity-70"
+            >
+              {downloadingCsv ? <Loader2 className="animate-spin" size={18} /> : <Download size={18} />}
+              Descargar CSV
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={loadCustomers}
+            className="inline-flex items-center justify-center gap-2 bg-white border rounded-xl px-4 py-3 text-gray-700 hover:bg-gray-50"
+          >
+            <RefreshCcw size={18} />
+            Actualizar
+          </button>
+        </div>
       </section>
 
       <section className="grid xl:grid-cols-[500px_1fr] gap-6">

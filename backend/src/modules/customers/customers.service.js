@@ -7,6 +7,7 @@ const Role = require('../users/role.model');
 const Company = require('../companies/company.model');
 const Establishment = require('../companies/establishment.model');
 const PointOfSale = require('../companies/point-of-sale.model');
+const { writeCsvLine } = require('../../utils/csv-stream');
 
 const VALID_DOCUMENT_TYPES = [
   'SIN_DOCUMENTO',
@@ -356,12 +357,12 @@ const validateCustomerData = (data) => {
   }
 };
 
-const listCustomers = async ({ query = {}, user }) => {
-  const currentUser = await resolveUserContext(user);
+
+const applyCustomerFilters = async ({ query = {}, user }) => {
   const { q = '', customerType = '', isActive = '', establishmentId = '' } = query;
 
   const where = await buildVisibilityWhere({
-    user: currentUser,
+    user,
     requestedEstablishmentId: establishmentId
   });
 
@@ -387,6 +388,24 @@ const listCustomers = async ({ query = {}, user }) => {
   if (isActive !== '') {
     where.isActive = isActive === 'true';
   }
+
+  return where;
+};
+
+const assertAdminCanExport = (user) => {
+  if (!isAdminUser(user)) {
+    const error = new Error('Solo el usuario administrador puede descargar este archivo CSV');
+    error.statusCode = 403;
+    throw error;
+  }
+};
+
+const listCustomers = async ({ query = {}, user }) => {
+  const currentUser = await resolveUserContext(user);
+  const where = await applyCustomerFilters({
+    query,
+    user: currentUser
+  });
 
   const customers = await Customer.findAll({
     where,
@@ -628,9 +647,130 @@ const updateCustomer = async (id, { data, user }) => {
   });
 };
 
+
+const streamCustomersCsv = async ({ query = {}, user, stream }) => {
+  const currentUser = await resolveUserContext(user);
+
+  assertAdminCanExport(currentUser);
+
+  const baseWhere = await applyCustomerFilters({
+    query,
+    user: currentUser
+  });
+
+  const batchSize = Number(process.env.CSV_EXPORT_BATCH_SIZE || 500);
+  const safeBatchSize = Number.isFinite(batchSize) && batchSize > 0
+    ? Math.min(batchSize, 1000)
+    : 500;
+
+  let lastId = 0;
+  let totalRows = 0;
+
+  stream.write('\uFEFF');
+  writeCsvLine(stream, [
+    'id',
+    'establishmentId',
+    'establishmentCode',
+    'establishmentName',
+    'customerType',
+    'documentType',
+    'documentNumber',
+    'nrc',
+    'name',
+    'commercialName',
+    'economicActivityCode',
+    'economicActivityName',
+    'secondaryEconomicActivityCode',
+    'secondaryEconomicActivityName',
+    'tertiaryEconomicActivityCode',
+    'tertiaryEconomicActivityName',
+    'email',
+    'phoneCountryCode',
+    'phoneDialCode',
+    'phoneNationalNumber',
+    'phone',
+    'departmentCode',
+    'departmentName',
+    'districtName',
+    'municipalityCode',
+    'municipalityName',
+    'addressComplement',
+    'countryCode',
+    'isActive',
+    'createdAt',
+    'updatedAt'
+  ]);
+
+  while (true) {
+    const batch = await Customer.findAll({
+      where: {
+        ...baseWhere,
+        id: {
+          [Op.gt]: lastId
+        }
+      },
+      include: [
+        {
+          model: Establishment,
+          as: 'establishment',
+          attributes: ['id', 'establishmentCode', 'name']
+        }
+      ],
+      order: [['id', 'ASC']],
+      limit: safeBatchSize
+    });
+
+    if (batch.length === 0) {
+      break;
+    }
+
+    for (const customer of batch) {
+      lastId = Number(customer.id);
+      totalRows += 1;
+
+      writeCsvLine(stream, [
+        customer.id,
+        customer.establishmentId,
+        customer.establishment?.establishmentCode,
+        customer.establishment?.name,
+        customer.customerType,
+        customer.documentType,
+        customer.documentNumber,
+        customer.nrc,
+        customer.name,
+        customer.commercialName,
+        customer.economicActivityCode,
+        customer.economicActivityName,
+        customer.secondaryEconomicActivityCode,
+        customer.secondaryEconomicActivityName,
+        customer.tertiaryEconomicActivityCode,
+        customer.tertiaryEconomicActivityName,
+        customer.email,
+        customer.phoneCountryCode,
+        customer.phoneDialCode,
+        customer.phoneNationalNumber,
+        customer.phone,
+        customer.departmentCode,
+        customer.departmentName,
+        customer.districtName,
+        customer.municipalityCode,
+        customer.municipalityName,
+        customer.addressComplement,
+        customer.countryCode,
+        customer.isActive ? 'true' : 'false',
+        customer.createdAt,
+        customer.updatedAt
+      ]);
+    }
+  }
+
+  return totalRows;
+};
+
 module.exports = {
   listCustomers,
   getCustomerById,
   createCustomer,
-  updateCustomer
+  updateCustomer,
+  streamCustomersCsv
 };

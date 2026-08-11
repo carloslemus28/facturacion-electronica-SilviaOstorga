@@ -1,4 +1,5 @@
 const customersService = require('./customers.service');
+const { setCsvDownloadHeaders } = require('../../utils/csv-stream');
 
 const listCustomers = async (req, res, next) => {
   try {
@@ -15,6 +16,30 @@ const listCustomers = async (req, res, next) => {
     });
   } catch (error) {
     next(error);
+  }
+};
+
+
+const downloadCustomersCsv = async (req, res, next) => {
+  try {
+    const dateKey = new Date().toISOString().slice(0, 10);
+
+    setCsvDownloadHeaders(res, `clientes-${dateKey}.csv`);
+
+    await customersService.streamCustomersCsv({
+      query: req.query,
+      user: req.user,
+      stream: res
+    });
+
+    res.end();
+  } catch (error) {
+    if (!res.headersSent) {
+      next(error);
+      return;
+    }
+
+    res.end();
   }
 };
 
@@ -69,6 +94,7 @@ const updateCustomer = async (req, res, next) => {
 
 module.exports = {
   listCustomers,
+  downloadCustomersCsv,
   getCustomerById,
   createCustomer,
   updateCustomer

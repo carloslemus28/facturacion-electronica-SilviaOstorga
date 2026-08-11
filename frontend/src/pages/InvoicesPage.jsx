@@ -35,8 +35,10 @@ import {
   getInvoicesRequest,
   invalidateInvoiceRequest,
   sendInvoiceEmailRequest,
-  transmitInvoiceRequest
+  transmitInvoiceRequest,
+  downloadInvoicesJsonPdfZipRequest
 } from '../api/invoices.api';
+import { useAuth } from '../context/AuthContext';
 
 const statusStyles = {
   BORRADOR: 'bg-gray-50 text-gray-700 border-gray-200',
@@ -114,6 +116,9 @@ const downloadBlob = (blob, fileName) => {
 };
 
 function InvoicesPage() {
+  const { user } = useAuth();
+  const isAdmin = Array.isArray(user?.roles) && user.roles.includes('ADMIN');
+
   const [invoices, setInvoices] = useState([]);
   const [selectedInvoice, setSelectedInvoice] = useState(null);
 
@@ -127,6 +132,7 @@ function InvoicesPage() {
   const [loading, setLoading] = useState(true);
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [processingId, setProcessingId] = useState(null);
+  const [exportingJsonPdf, setExportingJsonPdf] = useState(false);
 
   const [jsonModalOpen, setJsonModalOpen] = useState(false);
   const [jsonModalTitle, setJsonModalTitle] = useState('');
@@ -211,6 +217,41 @@ function InvoicesPage() {
     setDateRange(currentMonthRange);
     setAppliedDateRange(currentMonthRange);
     await loadInvoices(currentMonthRange);
+  };
+
+
+  const handleDownloadJsonPdfZip = async () => {
+    if (!isAdmin) {
+      toast.error('Solo el usuario administrador puede descargar esta exportación');
+      return;
+    }
+
+    if (!appliedDateRange.startDate || !appliedDateRange.endDate) {
+      toast.error('Seleccione y aplique un rango de fechas antes de descargar');
+      return;
+    }
+
+    try {
+      setExportingJsonPdf(true);
+
+      const response = await downloadInvoicesJsonPdfZipRequest({
+        startDate: appliedDateRange.startDate,
+        endDate: appliedDateRange.endDate
+      });
+
+      const fileName = getFileNameFromDisposition(
+        response.headers?.['content-disposition'],
+        `dte-json-pdf-${appliedDateRange.startDate}_a_${appliedDateRange.endDate}.zip`
+      );
+
+      downloadBlob(response.data, fileName);
+      toast.success('ZIP de JSON/PDF descargado correctamente');
+    } catch (error) {
+      console.error('Error descargando ZIP de JSON/PDF:', error);
+      toast.error(error.response?.data?.message || 'No se pudo descargar el ZIP de JSON/PDF');
+    } finally {
+      setExportingJsonPdf(false);
+    }
   };
 
   useEffect(() => {
@@ -2106,7 +2147,7 @@ const renderEmailLogAttachments = (attachmentsJson) => {
               </button>
             </div>
           )}
-        
+
             </div>
           </div>
         </div>
@@ -2203,7 +2244,7 @@ const renderEmailLogAttachments = (attachmentsJson) => {
             </select>
           </div>
 
-          <div className="grid md:grid-cols-[1fr_1fr_auto_auto] gap-3 mb-5">
+          <div className="grid md:grid-cols-[1fr_1fr_auto_auto_auto] gap-3 mb-5">
             <label className="block">
               <span className="block text-sm font-medium text-gray-700 mb-1">
                 Fecha inicial
@@ -2251,6 +2292,18 @@ const renderEmailLogAttachments = (attachmentsJson) => {
             >
               Mes actual
             </button>
+
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={handleDownloadJsonPdfZip}
+                disabled={loading || exportingJsonPdf}
+                className="self-end inline-flex items-center justify-center gap-2 bg-green-700 text-white rounded-xl px-4 py-3 font-semibold hover:bg-green-600 disabled:opacity-70"
+              >
+                {exportingJsonPdf ? <Loader2 className="animate-spin" size={18} /> : <Download size={18} />}
+                Descargar JSON/PDF
+              </button>
+            )}
           </div>
 
           <p className="text-xs text-gray-500 mb-5">

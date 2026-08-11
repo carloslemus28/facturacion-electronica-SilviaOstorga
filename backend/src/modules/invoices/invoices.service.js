@@ -1572,6 +1572,81 @@ const listInvoices = async ({ user, startDate, endDate }) => {
   return invoices;
 };
 
+
+const listInvoicesForJsonPdfExportBatch = async ({
+  user,
+  startDate,
+  endDate,
+  lastId = 0,
+  limit = 25
+}) => {
+  const currentUser = await resolveUserContext(user);
+
+  if (!isAdminUser(currentUser)) {
+    const error = new Error('Solo el usuario administrador puede descargar JSON y PDF masivamente');
+    error.statusCode = 403;
+    throw error;
+  }
+
+  if (!currentUser?.company) {
+    const error = new Error('El usuario no tiene empresa emisora asignada');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const visibilityWhere = await buildInvoiceVisibilityWhere(currentUser);
+  const safeLimit = Number.isFinite(Number(limit)) && Number(limit) > 0
+    ? Math.min(Number(limit), 50)
+    : 25;
+
+  const invoices = await Invoice.findAll({
+    where: {
+      ...visibilityWhere,
+      id: {
+        [Op.gt]: Number(lastId || 0)
+      },
+      issuedAt: getIssuedAtRangeForList({
+        startDate,
+        endDate
+      })
+    },
+    include: [
+      {
+        model: Company,
+        as: 'company'
+      },
+      buildPointOfSaleInclude(),
+      {
+        model: User,
+        as: 'user',
+        attributes: ['id', 'username', 'firstName', 'lastName', 'email']
+      },
+      {
+        model: Customer,
+        as: 'customer'
+      },
+      {
+        model: InvoiceItem,
+        as: 'items',
+        include: [
+          {
+            model: Product,
+            as: 'product'
+          }
+        ]
+      }
+    ],
+    order: [['id', 'ASC']],
+    limit: safeLimit
+  });
+
+  for (const invoice of invoices) {
+    await attachRelatedInvoiceForDocumentRelated(invoice);
+  }
+
+  return invoices;
+};
+
 const getInvoiceById = async (id, options = {}) => {
   const { user = null } = options;
 
@@ -2157,6 +2232,7 @@ module.exports = {
   createGeneratedInvoice,
   updateGeneratedInvoice,
   listInvoices,
+  listInvoicesForJsonPdfExportBatch,
   getInvoiceById,
   getDashboardSummary,
   listAvailableDocumentsForCreditNote,

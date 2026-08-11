@@ -98,3 +98,12 @@ export const getInvoiceEmailLogsRequest = async (id) => {
   const response = await api.get(`/emails/invoices/${id}/logs`);
   return response.data;
 };
+
+export const downloadInvoicesJsonPdfZipRequest = async (params = {}) => {
+  const response = await api.get('/invoices/export/json-pdf', {
+    params,
+    responseType: 'blob'
+  });
+
+  return response;
+};

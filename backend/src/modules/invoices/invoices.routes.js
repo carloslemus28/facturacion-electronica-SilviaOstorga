@@ -5,6 +5,17 @@ const { authenticate, authorize } = require('../../middlewares/auth.middleware')
 
 const router = express.Router();
 
+const requireAdmin = (req, res, next) => {
+  if (!Array.isArray(req.user?.roles) || !req.user.roles.includes('ADMIN')) {
+    return res.status(403).json({
+      ok: false,
+      message: 'Solo el usuario administrador puede descargar esta exportación'
+    });
+  }
+
+  return next();
+};
+
 router.get(
   '/',
   authenticate,
@@ -17,6 +28,15 @@ router.get(
   authenticate,
   authorize('INVOICES_VIEW'),
   invoicesController.getDashboardSummary
+);
+
+
+router.get(
+  '/export/json-pdf',
+  authenticate,
+  requireAdmin,
+  authorize('INVOICES_VIEW'),
+  invoicesController.exportInvoicesJsonPdfZip
 );
 
 router.get(

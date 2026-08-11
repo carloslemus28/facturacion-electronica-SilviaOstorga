@@ -6,6 +6,7 @@ const Role = require('../users/role.model');
 const Company = require('../companies/company.model');
 const Establishment = require('../companies/establishment.model');
 const PointOfSale = require('../companies/point-of-sale.model');
+const { writeCsvLine } = require('../../utils/csv-stream');
 
 const normalizeText = (value) => {
   if (value === undefined || value === null) return null;
@@ -243,12 +244,12 @@ const validateProductData = (data) => {
   }
 };
 
-const listProducts = async ({ query = {}, user }) => {
-  const currentUser = await resolveUserContext(user);
+
+const applyProductFilters = async ({ query = {}, user }) => {
   const { q = '', itemType = '', isActive = '', establishmentId = '' } = query;
 
   const where = await buildVisibilityWhere({
-    user: currentUser,
+    user,
     requestedEstablishmentId: establishmentId
   });
 
@@ -267,6 +268,24 @@ const listProducts = async ({ query = {}, user }) => {
   if (isActive !== '') {
     where.isActive = isActive === 'true';
   }
+
+  return where;
+};
+
+const assertAdminCanExport = (user) => {
+  if (!isAdminUser(user)) {
+    const error = new Error('Solo el usuario administrador puede descargar este archivo CSV');
+    error.statusCode = 403;
+    throw error;
+  }
+};
+
+const listProducts = async ({ query = {}, user }) => {
+  const currentUser = await resolveUserContext(user);
+  const where = await applyProductFilters({
+    query,
+    user: currentUser
+  });
 
   const products = await Product.findAll({
     where,
@@ -441,9 +460,104 @@ const updateProduct = async (id, { data, user }) => {
   });
 };
 
+
+const streamProductsCsv = async ({ query = {}, user, stream }) => {
+  const currentUser = await resolveUserContext(user);
+
+  assertAdminCanExport(currentUser);
+
+  const baseWhere = await applyProductFilters({
+    query,
+    user: currentUser
+  });
+
+  const batchSize = Number(process.env.CSV_EXPORT_BATCH_SIZE || 500);
+  const safeBatchSize = Number.isFinite(batchSize) && batchSize > 0
+    ? Math.min(batchSize, 1000)
+    : 500;
+
+  let lastId = 0;
+  let totalRows = 0;
+
+  stream.write('\uFEFF');
+  writeCsvLine(stream, [
+    'id',
+    'establishmentId',
+    'establishmentCode',
+    'establishmentName',
+    'code',
+    'itemType',
+    'name',
+    'description',
+    'unitOfMeasure',
+    'unitOfMeasureName',
+    'purchasePrice',
+    'salePrice',
+    'unitPrice',
+    'appliesIva',
+    'stock',
+    'isActive',
+    'createdAt',
+    'updatedAt'
+  ]);
+
+  while (true) {
+    const batch = await Product.findAll({
+      where: {
+        ...baseWhere,
+        id: {
+          [Op.gt]: lastId
+        }
+      },
+      include: [
+        {
+          model: Establishment,
+          as: 'establishment',
+          attributes: ['id', 'establishmentCode', 'name']
+        }
+      ],
+      order: [['id', 'ASC']],
+      limit: safeBatchSize
+    });
+
+    if (batch.length === 0) {
+      break;
+    }
+
+    for (const product of batch) {
+      lastId = Number(product.id);
+      totalRows += 1;
+
+      writeCsvLine(stream, [
+        product.id,
+        product.establishmentId,
+        product.establishment?.establishmentCode,
+        product.establishment?.name,
+        product.code,
+        product.itemType,
+        product.name,
+        product.description,
+        product.unitOfMeasure,
+        product.unitOfMeasureName,
+        product.purchasePrice,
+        product.salePrice,
+        product.unitPrice,
+        product.appliesIva ? 'true' : 'false',
+        product.stock,
+        product.isActive ? 'true' : 'false',
+        product.createdAt,
+        product.updatedAt
+      ]);
+    }
+  }
+
+  return totalRows;
+};
+
 module.exports = {
   listProducts,
   getProductById,
   createProduct,
-  updateProduct
+  updateProduct,
+  streamProductsCsv
 };

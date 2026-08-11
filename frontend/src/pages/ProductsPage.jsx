@@ -8,14 +8,50 @@ import {
   Plus,
   RefreshCcw,
   Save,
-  Search
+  Search,
+  Download
 } from 'lucide-react';
 
 import {
   createProductRequest,
+  downloadProductsCsvRequest,
   getProductsRequest,
   updateProductRequest
 } from '../api/products.api';
+
+import { useAuth } from '../context/AuthContext';
+
+
+const getFileNameFromDisposition = (contentDisposition, fallbackName) => {
+  if (!contentDisposition) return fallbackName;
+
+  const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+
+  if (utf8Match?.[1]) {
+    return decodeURIComponent(utf8Match[1]);
+  }
+
+  const normalMatch = contentDisposition.match(/filename="?([^"]+)"?/i);
+
+  if (normalMatch?.[1]) {
+    return normalMatch[1];
+  }
+
+  return fallbackName;
+};
+
+const downloadBlob = (blob, fileName) => {
+  const url = window.URL.createObjectURL(blob);
+  const link = document.createElement('a');
+
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+
+  link.remove();
+  window.URL.revokeObjectURL(url);
+};
 
 const initialForm = {
   code: '',
@@ -44,6 +80,9 @@ const unitOptions = [
 ];
 
 function ProductsPage() {
+  const { user } = useAuth();
+  const isAdmin = Array.isArray(user?.roles) && user.roles.includes('ADMIN');
+
   const [products, setProducts] = useState([]);
   const [form, setForm] = useState(initialForm);
   const [editingId, setEditingId] = useState(null);
@@ -53,6 +92,7 @@ function ProductsPage() {
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [downloadingCsv, setDownloadingCsv] = useState(false);
 
   const isEditing = Boolean(editingId);
   const isService = form.itemType === 'SERVICIO';
@@ -237,6 +277,36 @@ function ProductsPage() {
     await loadProducts();
   };
 
+
+  const handleDownloadCsv = async () => {
+    if (!isAdmin) {
+      toast.error('Solo el usuario administrador puede descargar el CSV');
+      return;
+    }
+
+    try {
+      setDownloadingCsv(true);
+
+      const response = await downloadProductsCsvRequest({
+        q,
+        itemType: itemTypeFilter
+      });
+
+      const fileName = getFileNameFromDisposition(
+        response.headers?.['content-disposition'],
+        'productos-servicios.csv'
+      );
+
+      downloadBlob(response.data, fileName);
+      toast.success('CSV de productos/servicios descargado correctamente');
+    } catch (error) {
+      console.error('Error descargando CSV de productos/servicios:', error);
+      toast.error(error.response?.data?.message || 'No se pudo descargar el CSV de productos/servicios');
+    } finally {
+      setDownloadingCsv(false);
+    }
+  };
+
   const formatMoney = (value) => {
     const number = Number(value || 0);
 
@@ -264,13 +334,28 @@ function ProductsPage() {
           </div>
         </div>
 
-        <button
-          onClick={loadProducts}
-          className="inline-flex items-center justify-center gap-2 bg-white border rounded-xl px-4 py-3 text-gray-700 hover:bg-gray-50"
-        >
-          <RefreshCcw size={18} />
-          Actualizar
-        </button>
+        <div className="flex flex-col sm:flex-row gap-3">
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={handleDownloadCsv}
+              disabled={downloadingCsv}
+              className="inline-flex items-center justify-center gap-2 bg-green-700 text-white rounded-xl px-4 py-3 hover:bg-green-600 disabled:opacity-70"
+            >
+              {downloadingCsv ? <Loader2 className="animate-spin" size={18} /> : <Download size={18} />}
+              Descargar CSV
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={loadProducts}
+            className="inline-flex items-center justify-center gap-2 bg-white border rounded-xl px-4 py-3 text-gray-700 hover:bg-gray-50"
+          >
+            <RefreshCcw size={18} />
+            Actualizar
+          </button>
+        </div>
       </section>
 
       <section className="grid xl:grid-cols-[430px_1fr] gap-6">
