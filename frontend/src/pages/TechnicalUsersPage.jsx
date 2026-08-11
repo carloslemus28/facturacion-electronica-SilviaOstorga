@@ -44,6 +44,25 @@ const establishmentTypeOptions = [
   { value: 'PREDIO', label: 'Predio' }
 ];
 
+
+const matchesSelectedLocation = (location, districtName, municipalityCode, municipalityName) => {
+  if (location.districtName !== districtName) return false;
+
+  const selectedCode = String(municipalityCode || '').trim();
+  const catalogCode = String(location.municipalityCode || '').trim();
+  const legacyCode = String(location.legacyMunicipalityCode || '').trim();
+
+  return catalogCode === selectedCode ||
+    legacyCode === selectedCode ||
+    location.municipalityName === municipalityName;
+};
+
+const getMunicipalityDescription = (option) => {
+  if (!option) return '';
+
+  return `Municipio: ${option.municipalityName} · Código CAT-013: ${option.municipalityCode}`;
+};
+
 const initialEstablishmentForm = {
   establishmentType: 'SUCURSAL',
   establishmentCode: '',
@@ -137,10 +156,14 @@ function TechnicalUsersPage() {
 
   const selectedDistrict = useMemo(() => {
     return availableDistricts.find((location) =>
-      location.districtName === establishmentForm.districtName &&
-      location.municipalityCode === establishmentForm.municipalityCode
+      matchesSelectedLocation(
+      location,
+      establishmentForm.districtName,
+      establishmentForm.municipalityCode,
+      establishmentForm.municipalityName
+    )
     ) || null;
-  }, [availableDistricts, establishmentForm.districtName, establishmentForm.municipalityCode]);
+  }, [availableDistricts, establishmentForm.districtName, establishmentForm.municipalityCode, establishmentForm.municipalityName]);
 
   const nextPointCode = useMemo(() => {
     if (!pointForm.establishmentId) return 'P001';
@@ -748,7 +771,7 @@ function TechnicalUsersPage() {
               disabled={!selectedDepartment}
               getOptionValue={(option) => `${option.districtName}-${option.municipalityCode}`}
               getOptionLabel={(option) => option.districtName}
-              getOptionDescription={(option) => `Municipio: ${option.municipalityName}`}
+              getOptionDescription={getMunicipalityDescription}
             />
 
             <div>

@@ -1,4 +1,8 @@
 const invoicesService = require('../invoices/invoices.service');
+const {
+  buildSvAddressComplement,
+  resolveSvMunicipalityCode
+} = require('../../utils/sv-location-catalog');
 
 const DOCUMENT_TYPE_CODES = {
   FACTURA: '01',
@@ -120,6 +124,26 @@ const cleanAddressComplement = (value) => {
 
   return text;
 };
+
+const cleanSvMunicipalityCode = ({
+  departmentCode,
+  municipalityCode,
+  municipalityName
+}) => {
+  return resolveSvMunicipalityCode({
+    departmentCode,
+    municipalityCode,
+    municipalityName
+  }) || cleanCatalogCode(municipalityCode, 2);
+};
+
+const cleanSvAddressComplement = (addressComplement, districtName) => {
+  return buildSvAddressComplement({
+    addressComplement: cleanAddressComplement(addressComplement),
+    districtName: cleanString(districtName)
+  });
+};
+
 
 const APP_TIME_ZONE = process.env.APP_TIMEZONE || 'America/El_Salvador';
 
@@ -784,8 +808,15 @@ const buildIssuer = (invoice) => {
     tipoEstablecimiento: getEstablishmentTypeCode(establishment.establishmentType || company.establishmentType),
     direccion: {
       departamento: cleanCatalogCode(establishment.departmentCode || company.departmentCode, 2),
-      municipio: cleanCatalogCode(establishment.municipalityCode || company.municipalityCode, 2),
-      complemento: cleanAddressComplement(establishment.addressComplement || company.addressComplement)
+      municipio: cleanSvMunicipalityCode({
+        departmentCode: establishment.departmentCode || company.departmentCode,
+        municipalityCode: establishment.municipalityCode || company.municipalityCode,
+        municipalityName: establishment.municipalityName || company.municipalityName
+      }),
+      complemento: cleanSvAddressComplement(
+        establishment.addressComplement || company.addressComplement,
+        establishment.districtName || company.districtName
+      )
     },
     telefono: cleanPhone(company.phone),
     correo: cleanString(company.email),
@@ -920,8 +951,12 @@ const buildConsumerFinalReceiver = (customer, company = {}) => {
     descActividad: cleanString(customer.economicActivityName),
     direccion: {
       departamento: cleanCatalogCode(customer.departmentCode, 2),
-      municipio: cleanCatalogCode(customer.municipalityCode, 2),
-      complemento: cleanAddressComplement(customer.addressComplement)
+      municipio: cleanSvMunicipalityCode({
+        departmentCode: customer.departmentCode,
+        municipalityCode: customer.municipalityCode,
+        municipalityName: customer.municipalityName
+      }),
+      complemento: cleanSvAddressComplement(customer.addressComplement, customer.districtName)
     },
     telefono: cleanPhone(customer.phone) || cleanPhone(company.phone) || '00000000',
     correo: cleanString(customer.email)
@@ -957,8 +992,12 @@ const buildDeliveryNoteReceiver = (invoice) => {
     nombreComercial: cleanString(customer.commercialName || customer.name),
     direccion: {
       departamento: cleanCatalogCode(customer.departmentCode, 2),
-      municipio: cleanCatalogCode(customer.municipalityCode, 2),
-      complemento: cleanAddressComplement(customer.addressComplement)
+      municipio: cleanSvMunicipalityCode({
+        departmentCode: customer.departmentCode,
+        municipalityCode: customer.municipalityCode,
+        municipalityName: customer.municipalityName
+      }),
+      complemento: cleanSvAddressComplement(customer.addressComplement, customer.districtName)
     },
     telefono: cleanPhone(customer.phone) || cleanPhone(company.phone) || '00000000',
     correo: cleanString(customer.email),
@@ -980,8 +1019,12 @@ const buildTaxpayerReceiver = (customer, company = {}) => {
     nombreComercial: cleanString(customer.commercialName || customer.name),
     direccion: {
       departamento: cleanCatalogCode(customer.departmentCode, 2),
-      municipio: cleanCatalogCode(customer.municipalityCode, 2),
-      complemento: cleanAddressComplement(customer.addressComplement)
+      municipio: cleanSvMunicipalityCode({
+        departmentCode: customer.departmentCode,
+        municipalityCode: customer.municipalityCode,
+        municipalityName: customer.municipalityName
+      }),
+      complemento: cleanSvAddressComplement(customer.addressComplement, customer.districtName)
     },
     telefono: cleanPhone(customer.phone) || cleanPhone(company.phone) || '00000000',
     correo: cleanString(customer.email)
@@ -1030,8 +1073,12 @@ const buildExcludedSubject = (customer, company = {}) => {
     descActividad: cleanString(customer.economicActivityName),
     direccion: {
       departamento: cleanCatalogCode(customer.departmentCode, 2),
-      municipio: cleanCatalogCode(customer.municipalityCode, 2),
-      complemento: cleanAddressComplement(customer.addressComplement)
+      municipio: cleanSvMunicipalityCode({
+        departmentCode: customer.departmentCode,
+        municipalityCode: customer.municipalityCode,
+        municipalityName: customer.municipalityName
+      }),
+      complemento: cleanSvAddressComplement(customer.addressComplement, customer.districtName)
     },
     telefono: cleanPhone(customer.phone) || cleanPhone(company.phone) || '00000000',
     correo: cleanString(customer.email)

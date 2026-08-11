@@ -70,3 +70,5 @@ export const elSalvadorDepartments = [
     "label": "11 - Usulután"
   }
 ];
+
+export const elSalvadorDepartmentCatalog = 'CAT-012';

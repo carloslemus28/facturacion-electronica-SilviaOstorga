@@ -95,6 +95,25 @@ const phoneCountryOptions = getCountries()
   })
   .sort((a, b) => a.countryName.localeCompare(b.countryName, 'es'));
 
+
+const matchesSelectedLocation = (location, districtName, municipalityCode, municipalityName) => {
+  if (location.districtName !== districtName) return false;
+
+  const selectedCode = String(municipalityCode || '').trim();
+  const catalogCode = String(location.municipalityCode || '').trim();
+  const legacyCode = String(location.legacyMunicipalityCode || '').trim();
+
+  return catalogCode === selectedCode ||
+    legacyCode === selectedCode ||
+    location.municipalityName === municipalityName;
+};
+
+const getMunicipalityDescription = (option) => {
+  if (!option) return '';
+
+  return `Municipio: ${option.municipalityName} · Código CAT-013: ${option.municipalityCode}`;
+};
+
 const initialForm = {
   documentType: 'SIN_DOCUMENTO',
   documentNumber: '',
@@ -204,10 +223,14 @@ function CustomersPage() {
 
   const selectedDistrict = useMemo(() => {
     return availableDistricts.find((location) =>
-      location.districtName === form.districtName &&
-      location.municipalityCode === form.municipalityCode
+      matchesSelectedLocation(
+      location,
+      form.districtName,
+      form.municipalityCode,
+      form.municipalityName
+    )
     ) || null;
-  }, [availableDistricts, form.districtName, form.municipalityCode]);
+  }, [availableDistricts, form.districtName, form.municipalityCode, form.municipalityName]);
 
   const filteredDescription = useMemo(() => {
     if (!q && !activeFilter) {
@@ -934,7 +957,7 @@ const handlePhoneCountryChange = (country) => {
                   disabled={!selectedDepartment}
                   getOptionValue={(option) => `${option.districtName}-${option.municipalityCode}`}
                   getOptionLabel={(option) => option.districtName}
-                  getOptionDescription={(option) => `Municipio: ${option.municipalityName}`}
+                  getOptionDescription={getMunicipalityDescription}
                 />
               </div>
 
